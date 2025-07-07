@@ -1,6 +1,7 @@
 package tint
 
 import (
+	"io"
 	"log/slog"
 	"os"
 )
@@ -9,8 +10,10 @@ const (
 	TIME_FORMAT = "2006-01-02 15:04:05.000000"
 )
 
-func ConfigFromEnv(args ...any) {
-	stdout := os.Stdout
+func ConfigFromEnv(w io.Writer, args ...any) {
+	if w == nil {
+		w = os.Stderr
+	}
 	opts := Options{
 		AddSource:  true,
 		Level:      slog.LevelInfo,
@@ -40,7 +43,7 @@ func ConfigFromEnv(args ...any) {
 	}
 	opts.NoColor = !colors
 
-	handler := NewHandler(stdout, &opts)
+	handler := NewHandler(w, &opts)
 	logger := slog.New(handler).With(args...)
 	slog.SetDefault(logger)
 }
