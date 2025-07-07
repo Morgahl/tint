@@ -94,7 +94,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -107,13 +106,24 @@ import (
 
 const (
 	// ANSI modes
-	ansiEsc          = '\u001b'
-	ansiReset        = "\u001b[0m"
-	ansiFaint        = "\u001b[2m"
-	ansiResetFaint   = "\u001b[22m"
-	ansiBrightRed    = "\u001b[91m"
-	ansiBrightGreen  = "\u001b[92m"
-	ansiBrightYellow = "\u001b[93m"
+	ansiEsc           = '\u001b'
+	ansiReset         = "\u001b[0m"
+	ansiFaint         = "\u001b[2m"
+	ansiResetFaint    = "\u001b[22m"
+	ansiItalic        = "\u001b[3m"
+	ansiResetItalic   = "\u001b[23m"
+	ansiRed           = "\u001b[31m"
+	ansiGreen         = "\u001b[32m"
+	ansiYellow        = "\u001b[33m"
+	ansiBlue          = "\u001b[34m"
+	ansiMagenta       = "\u001b[35m"
+	ansiCyan          = "\u001b[36m"
+	ansiBrightRed     = "\u001b[91m"
+	ansiBrightGreen   = "\u001b[92m"
+	ansiBrightYellow  = "\u001b[93m"
+	ansiBrightBlue    = "\u001b[94m"
+	ansiBrightMagenta = "\u001b[95m"
+	ansiBrightCyan    = "\u001b[96m"
 
 	errKey = "err"
 
@@ -205,12 +215,12 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 	if !r.Time.IsZero() {
 		val := r.Time.Round(0) // strip monotonic to match Attr behavior
 		if rep == nil {
-			h.appendTintTime(buf, r.Time, -1)
+			h.appendTintTime(buf, r.Level, r.Time, -1)
 			buf.WriteByte(' ')
 		} else if a := rep(nil /* groups */, slog.Time(slog.TimeKey, val)); a.Key != "" {
 			val, color := h.resolve(a.Value)
 			if val.Kind() == slog.KindTime {
-				h.appendTintTime(buf, val.Time(), color)
+				h.appendTintTime(buf, r.Level, val.Time(), color)
 			} else {
 				h.appendTintValue(buf, val, false, color, true)
 			}
@@ -235,6 +245,27 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 		}
 		buf.WriteByte(' ')
 	}
+
+	// write message
+	if rep == nil {
+		buf.WriteString(r.Message)
+		buf.WriteByte(' ')
+	} else if a := rep(nil /* groups */, slog.String(slog.MessageKey, r.Message)); a.Key != "" {
+		val, color := h.resolve(a.Value)
+		h.appendTintValue(buf, val, false, color, false)
+		buf.WriteByte(' ')
+	}
+
+	// write handler attributes
+	if len(h.attrsPrefix) > 0 {
+		buf.WriteString(h.attrsPrefix)
+	}
+
+	// write attributes
+	r.Attrs(func(attr slog.Attr) bool {
+		h.appendTintAttr(buf, r.Level, attr, h.groupPrefix, h.groups)
+		return true
+	})
 
 	// write source
 	if h.opts.AddSource {
@@ -263,27 +294,6 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 			}
 		}
 	}
-
-	// write message
-	if rep == nil {
-		buf.WriteString(r.Message)
-		buf.WriteByte(' ')
-	} else if a := rep(nil /* groups */, slog.String(slog.MessageKey, r.Message)); a.Key != "" {
-		val, color := h.resolve(a.Value)
-		h.appendTintValue(buf, val, false, color, false)
-		buf.WriteByte(' ')
-	}
-
-	// write handler attributes
-	if len(h.attrsPrefix) > 0 {
-		buf.WriteString(h.attrsPrefix)
-	}
-
-	// write attributes
-	r.Attrs(func(attr slog.Attr) bool {
-		h.appendAttr(buf, attr, h.groupPrefix, h.groups)
-		return true
-	})
 
 	if len(*buf) == 0 {
 		buf.WriteByte('\n')
@@ -325,7 +335,25 @@ func (h *handler) WithGroup(name string) slog.Handler {
 	return h2
 }
 
-func (h *handler) appendTintTime(buf *buffer, t time.Time, color int16) {
+func (h *handler) appendTintTime(buf *buffer, level slog.Level, t time.Time, color int16) {
+
+	if !h.opts.NoColor {
+		if color >= 0 {
+			appendAnsi(buf, uint8(color), false)
+		} else {
+			switch {
+			case level < slog.LevelInfo:
+				buf.WriteString(ansiBrightCyan)
+			case level < slog.LevelWarn:
+				buf.WriteString(ansiBrightGreen)
+			case level < slog.LevelError:
+				buf.WriteString(ansiBrightYellow)
+			default:
+				buf.WriteString(ansiBrightRed)
+			}
+		}
+	}
+
 	if h.opts.NoColor {
 		*buf = t.AppendFormat(*buf, h.opts.TimeFormat)
 	} else {
@@ -355,6 +383,7 @@ func (h *handler) appendTintLevel(buf *buffer, level slog.Level, color int16) {
 		} else {
 			switch {
 			case level < slog.LevelInfo:
+				buf.WriteString(ansiBrightCyan)
 			case level < slog.LevelWarn:
 				buf.WriteString(ansiBrightGreen)
 			case level < slog.LevelError:
@@ -376,15 +405,13 @@ func (h *handler) appendTintLevel(buf *buffer, level slog.Level, color int16) {
 		buf.Write(str("ERR", level-slog.LevelError))
 	}
 
-	if !h.opts.NoColor && level >= slog.LevelInfo {
+	if !h.opts.NoColor {
 		buf.WriteString(ansiReset)
 	}
 }
 
 func appendSource(buf *buffer, src *slog.Source) {
-	dir, file := filepath.Split(src.File)
-
-	buf.WriteString(filepath.Join(filepath.Base(dir), file))
+	buf.WriteString(src.File)
 	buf.WriteByte(':')
 	*buf = strconv.AppendInt(*buf, int64(src.Line), 10)
 }
@@ -440,6 +467,83 @@ func (h *handler) appendAttr(buf *buffer, attr slog.Attr, groupsPrefix string, g
 			h.appendKey(buf, attr.Key, groupsPrefix)
 			buf.WriteString(ansiReset)
 			h.appendValue(buf, attr.Value, true)
+		}
+	}
+	buf.WriteByte(' ')
+}
+
+func (h *handler) appendTintAttr(buf *buffer, level slog.Level, attr slog.Attr, groupsPrefix string, groups []string) {
+	var color int16 // -1 if no color
+	attr.Value, color = h.resolve(attr.Value)
+	if rep := h.opts.ReplaceAttr; rep != nil && attr.Value.Kind() != slog.KindGroup {
+		attr = rep(groups, attr)
+		var colorRep int16
+		attr.Value, colorRep = h.resolve(attr.Value)
+		if colorRep >= 0 {
+			color = colorRep
+		}
+	}
+
+	if attr.Equal(slog.Attr{}) {
+		return
+	}
+
+	if attr.Value.Kind() == slog.KindGroup {
+		if attr.Key != "" {
+			groupsPrefix += attr.Key + "."
+			groups = append(groups, attr.Key)
+		}
+		for _, groupAttr := range attr.Value.Group() {
+			h.appendTintAttr(buf, level, groupAttr, groupsPrefix, groups)
+		}
+		return
+	}
+
+	if !h.opts.NoColor {
+		if color >= 0 {
+			appendAnsi(buf, uint8(color), false)
+		} else {
+			switch {
+			case level < slog.LevelInfo:
+				buf.WriteString(ansiBrightCyan)
+			case level < slog.LevelWarn:
+				buf.WriteString(ansiBrightGreen)
+			case level < slog.LevelError:
+				buf.WriteString(ansiBrightYellow)
+			default:
+				buf.WriteString(ansiBrightRed)
+			}
+		}
+	}
+
+	if h.opts.NoColor {
+		h.appendKey(buf, attr.Key, groupsPrefix)
+		h.appendValue(buf, attr.Value, true)
+	} else {
+		if color >= 0 {
+			appendAnsi(buf, uint8(color), true)
+			h.appendKey(buf, attr.Key, groupsPrefix)
+			buf.WriteString(ansiResetFaint)
+			h.appendValue(buf, attr.Value, true)
+			buf.WriteString(ansiReset)
+		} else {
+			buf.WriteString(ansiFaint)
+			buf.WriteString(ansiItalic)
+			h.appendKey(buf, attr.Key, groupsPrefix)
+			buf.WriteString(ansiResetItalic)
+			buf.WriteString(ansiResetFaint)
+			switch {
+			case level < slog.LevelInfo:
+				buf.WriteString(ansiCyan)
+			case level < slog.LevelWarn:
+				buf.WriteString(ansiGreen)
+			case level < slog.LevelError:
+				buf.WriteString(ansiYellow)
+			default:
+				buf.WriteString(ansiRed)
+			}
+			h.appendValue(buf, attr.Value, true)
+			buf.WriteString(ansiReset)
 		}
 	}
 	buf.WriteByte(' ')
